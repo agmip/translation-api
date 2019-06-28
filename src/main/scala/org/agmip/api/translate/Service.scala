@@ -16,12 +16,14 @@ import scala.io.StdIn
 
 import scala.concurrent.Future
 
+
 object Service {
   implicit val system = ActorSystem("translate-api")
   implicit val materializer = ActorMaterializer()
   implicit val executionContext = system.dispatcher
 
   final case class Capabilities(input: List[String], output: List[String])
+  final case class Job(id: String, name: Option[String], input: String, output: String, status: String)
   final case class JobSubmission(name: Option[String], input: String, output: String)
   final case class JobId(id: String)
   final case class Err(error: String)
@@ -29,19 +31,27 @@ object Service {
   implicit val jobSubmissionFormat = jsonFormat3(JobSubmission)
   implicit val jobIdFormat = jsonFormat1(JobId)
   implicit val errFormat = jsonFormat1(Err)
+  implicit val jobFormat = jsonFormat5(Job)
 
   val supportedCaps = Capabilities("ACEB" :: Nil, "DSSAT" :: Nil)
+  var jobList: List[Job] = Nil
 
   def fetchCapabilities(): Future[Capabilities] = {
     Future { supportedCaps }
   }
 
-  def startJob(job: JobSubmission): Future[Either[JobId,Err]] = {
+  def createJob(job: JobSubmission): Job = {
+    val newJob = Job(UUID.randomUUID.toString, None, job.input, job.output, "PENDING")
+    jobList = newJob :: jobList
+    newJob
+  }
+
+  def startJob(job: JobSubmission): Future[Either[Job,Err]] = {
     Future { (supportedCaps.input.contains(job.input),
       supportedCaps.output.contains(job.output)) match {
-        case (true, true) => Left(JobId(UUID.randomUUID.toString))
-        case (true, false) =>  Right(Err(s"${job.output} is an invalid output format"))
-        case (false, true) =>  Right(Err(s"${job.input} is an invalid input format"))
+        case (true, true)   => Left(createJob(job))
+        case (true, false)  => Right(Err(s"${job.output} is an invalid output format"))
+        case (false, true)  => Right(Err(s"${job.input} is an invalid input format"))
         case (false, false) => Right(Err(s"${job.input} is an invalid input and ${job.output} is an invalid output"))
       } 
     }
@@ -57,9 +67,9 @@ object Service {
       post {
         path("job") {
           entity (as[JobSubmission]) { job =>
-            val eitherId: Future[Either[JobId, Err]] = startJob(job)
-            onSuccess(eitherId) {
-              case Left(id) => complete(id)
+            val eitherJob: Future[Either[Job, Err]] = startJob(job)
+            onSuccess(eitherJob) {
+              case Left(id)   => complete(id)
               case Right(err) => complete(StatusCodes.UnprocessableEntity -> err)
             }
           }
