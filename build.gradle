@@ -1,0 +1,30 @@
+plugins {
+	id 'scala'
+	id 'application'
+}
+
+repositories {
+	jcenter()
+	mavenCentral()
+	mavenLocal()
+}
+
+def scalaFullVersion = "2.13.0"
+def scalaVersion = scalaFullVersion.substring(0,scalaFullVersion.lastIndexOf("."))
+def akkaVersion = "2.5.23"
+def akkaHttpVersion = "10.1.8"
+
+dependencies {
+	implementation "org.scala-lang:scala-library:${scalaFullVersion}"
+	implementation "com.typesafe.akka:akka-http_${scalaVersion}:${akkaHttpVersion}"
+	implementation "com.typesafe.akka:akka-stream_${scalaVersion}:${akkaVersion}"
+	implementation "com.typesafe.akka:akka-http-spray-json_${scalaVersion}:${akkaHttpVersion}"
+}
+
+application {
+	mainClassName = "org.agmip.api.translate.Service"
+}
+
+run {
+  standardInput=System.in
+}
