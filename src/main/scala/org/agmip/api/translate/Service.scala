@@ -57,6 +57,13 @@ object Service {
     }
   }
 
+  def checkStatus(jobId: String): Future[Either[Job, Err]] = Future {
+      jobList.find(job => job.id == jobId) match {
+        case Some(j) => Left(j)
+        case None => Right(Err(s"$jobId not found"))
+      }
+    }
+
   def main(args: Array[String]): Unit = {
     val route: Route =
       get {
@@ -64,13 +71,48 @@ object Service {
           complete(fetchCapabilities())
         }
       } ~
-      post {
-        path("job") {
-          entity (as[JobSubmission]) { job =>
-            val eitherJob: Future[Either[Job, Err]] = startJob(job)
-            onSuccess(eitherJob) {
-              case Left(id)   => complete(id)
-              case Right(err) => complete(StatusCodes.UnprocessableEntity -> err)
+      path("jobs") {
+        get {
+          complete(jobList)
+        }
+      } ~
+      pathPrefix("job") {
+        pathEnd {
+          post {
+            entity (as[JobSubmission]) { job =>
+              val eitherJob: Future[Either[Job, Err]] = startJob(job)
+              onSuccess(eitherJob) {
+                case Left(id)   => complete(id)
+                case Right(err) => complete(StatusCodes.UnprocessableEntity -> err)
+              }
+            }
+          }
+        } ~
+        pathPrefix(Segment) { id =>
+          pathEnd {
+            get {
+              onSuccess(checkStatus(id)) {
+                case Left(job) => complete(job)
+                case Right(err) => complete(StatusCodes.NotFound -> err)
+              }
+            } ~
+            delete {
+              complete("Cancelled the job and removed all the files")
+            }
+          } ~
+          path("add") {
+            post {
+              complete("Added file to translate")
+            }
+          } ~
+          path("submit") {
+            get {
+              complete("Submitted to queue")
+            }
+          } ~
+          path("download") {
+            get {
+              complete("Downloaded completed translation")
             }
           }
         }
