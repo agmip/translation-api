@@ -1,6 +1,8 @@
 package org.agmip.api.translate
 
-import java.util.UUID
+import java.io.File
+import java.nio.file.{Files,Path,Paths,SimpleFileVisitor}
+import java.util.{Comparator, UUID}
 
 import akka.Done
 import akka.actor.ActorSystem
@@ -18,6 +20,7 @@ import scala.concurrent.Future
 
 
 object Service {
+  val fileStore = Paths.get("./storage/").normalize.toAbsolutePath
   implicit val system = ActorSystem("translate-api")
   implicit val materializer = ActorMaterializer()
   implicit val executionContext = system.dispatcher
@@ -46,6 +49,30 @@ object Service {
     newJob
   }
 
+  def findJob(jobId: String): Either[Job, Err] = {
+    jobList.find(job => job.id == jobId) match {
+      case Some(j) => Left(j)
+      case None => Right(Err(s"Invalid $jobId"))
+    }
+  }
+
+  def updateStatus(job: Job, newStatus: String): Job = {
+    val newJob = Job(job.id, job.name, job.input, job.output, newStatus)
+    jobList = newJob :: jobList
+    newJob
+  }
+
+  def checkStatus(jobId: String) = Future {
+    findJob(jobId)
+  }
+
+  def changeStatus(jobId: String, newStatus: String): Future[Either[Job,Err]] = Future {
+    findJob(jobId) match {
+      case Left(job) => Left(updateStatus(job, newStatus))
+      case Right(err) => Right(err)
+    }
+  }
+
   def startJob(job: JobSubmission): Future[Either[Job,Err]] = {
     Future { (supportedCaps.input.contains(job.input),
       supportedCaps.output.contains(job.output)) match {
@@ -57,12 +84,16 @@ object Service {
     }
   }
 
-  def checkStatus(jobId: String): Future[Either[Job, Err]] = Future {
-      jobList.find(job => job.id == jobId) match {
-        case Some(j) => Left(j)
-        case None => Right(Err(s"$jobId not found"))
+  def moveToStore(jobId: String, source: File, fileName: String) = {
+    val destinationPath = fileStore.resolve(jobId).resolve("inputs")
+    Files.exists(destinationPath) match {
+      case true => Files.copy(source.toPath(), destinationPath.resolve(fileName))
+      case false => {
+        Files.createDirectories(destinationPath)
+        Files.copy(source.toPath(), destinationPath.resolve(fileName))
       }
     }
+  }
 
   def main(args: Array[String]): Unit = {
     val route: Route =
@@ -97,17 +128,27 @@ object Service {
               }
             } ~
             delete {
-              complete("Cancelled the job and removed all the files")
+              dangerouslyDeleteDirectory(fileStore.resolve(id))
+              onSuccess(changeStatus(id, "CANCELLED")) {
+                case Left(job) => complete(job)
+                case Right(err) => complete(StatusCodes.NotFound -> err)
+              }
             }
           } ~
           path("add") {
-            post {
-              complete("Added file to translate")
+            uploadedFile("file") {
+              case (metadata, file) => {
+                moveToStore(id, file, metadata.fileName)
+                complete(s"${metadata.toString} | ${file.toString}")
+              }
             }
           } ~
           path("submit") {
             get {
-              complete("Submitted to queue")
+              onSuccess(changeStatus(id, "SUBMITTED")) {
+                case Left(job) => complete(job)
+                case Right(err) => complete(StatusCodes.NotFound -> err)
+              }
             }
           } ~
           path("download") {
@@ -124,6 +165,16 @@ object Service {
       StdIn.readLine()
       bindingFuture
         .flatMap(_.unbind())
-        .onComplete(_ => system.terminate())
+        .onComplete(_ => cleanUp())
+  }
+
+
+  def dangerouslyDeleteDirectory(path: Path): Unit = {
+    Files.walk(path).sorted(Comparator.reverseOrder()).forEach(Files.delete(_))
+  }
+
+  def cleanUp(): Unit = {
+    dangerouslyDeleteDirectory(fileStore)
+    system.terminate()
   }
 }
