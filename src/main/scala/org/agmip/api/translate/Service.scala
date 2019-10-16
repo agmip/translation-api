@@ -5,24 +5,85 @@ import java.nio.file.{Files, Path, Paths, SimpleFileVisitor}
 import java.util.{Comparator, UUID}
 
 import akka.Done
-import akka.actor.ActorSystem
+import akka.actor.{Actor, ActorSystem, Props}
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.marshallers.sprayjson.SprayJsonSupport._
 import akka.http.scaladsl.model.StatusCodes
 import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
+import org.agmip.ace.AceDataset
+import org.agmip.ace.io.AceParser
+import org.agmip.translators.dssat.DssatAcebOutput
 import spray.json.DefaultJsonProtocol._
 
 import scala.io.StdIn
+import scala.concurrent.{ExecutionContext, Future}
 
-import scala.concurrent.Future
+
 
 object Service {
+
+  class TranslationActor extends Actor {
+    implicit val executionContext: ExecutionContext =  context.dispatcher
+
+    def toAceDataset(job: Job) : Option[AceDataset] = {
+      val sourceDir: File = fileStore.resolve(job.id).resolve("inputs").toFile
+      val ds: Option[AceDataset] = if (sourceDir.isDirectory) {
+        job.input match {
+          case "ACEB" =>
+            sourceDir.listFiles.find(_.getName.endsWith(".aceb")) match {
+              case Some(f: File) => {
+                Some(AceParser.parseACEB(f))
+              }
+              case _ => {
+                changeStatus(job.id, "ERROR - ACEB not provided for ACEB translation")
+                None
+              }
+            }
+          case _ => {
+            changeStatus(job.id, "ERROR - Invalid input type")
+            None
+          }
+        }
+      } else {
+        None
+      }
+      ds
+    }
+
+    def writeTarget(job: Job, dataset: AceDataset): Unit = {
+      val targetPath: Path = fileStore.resolve(job.id).resolve("outputs")
+      Files.createDirectories(targetPath)
+      job.output match {
+        case "DSSAT" => {
+          val output = DssatAcebOutput.writeZipFile(targetPath.toString(), dataset);
+          changeStatus(job.id, "COMPLETED")
+        }
+        case _ => {
+          changeStatus(job.id, "ERROR - Invalid output type")
+        }
+      }
+    }
+
+    def receive = {
+      case job: Job => {
+        changeStatus(job.id, "STARTED")
+        toAceDataset(job) match {
+          case Some(source: AceDataset) => {
+            writeTarget(job, source);
+          }
+          case None => {} // Everything has been set at this point
+        }
+      }
+    }
+  }
+
   val fileStore = Paths.get("./storage/").normalize.toAbsolutePath
   implicit val system = ActorSystem("translate-api")
   implicit val materializer = ActorMaterializer()
   implicit val executionContext = system.dispatcher
+  val translator = system.actorOf(Props(new TranslationActor))
 
   final case class Capabilities(input: List[String], output: List[String])
   final case class Job(id: String,
@@ -50,7 +111,7 @@ object Service {
 
   def createJob(job: JobSubmission): Job = {
     val newJob =
-      Job(UUID.randomUUID.toString, None, job.input, job.output, "PENDING")
+      Job(UUID.randomUUID.toString, job.name, job.input, job.output, "PENDING")
     jobList = newJob :: jobList
     newJob
   }
@@ -109,6 +170,7 @@ object Service {
   }
 
   def executeJob(job: Job): Unit = {
+
   }
 
   def main(args: Array[String]): Unit = {
@@ -131,12 +193,13 @@ object Service {
                       complete(jobList)
                     }
                   },
-                  pathPrefix("job") {
+                  pathPrefix("create") {
                     concat(
                       pathEndOrSingleSlash {
                         post {
                           entity(as[JobSubmission]) { job =>
-                            val eitherJob: Future[Either[Job, Err]] = startJob(job)
+                            val eitherJob: Future[Either[Job, Err]] =
+                              startJob(job)
                             onSuccess(eitherJob) {
                               case Left(id) => complete(id)
                               case Right(err) =>
@@ -144,55 +207,64 @@ object Service {
                             }
                           }
                         }
-                      },
-                      pathPrefix(Segment) { id =>
-                        concat(
-                          pathEndOrSingleSlash {
-                            concat(
-                              get {
-                                onSuccess(checkStatus(id)) {
-                                  case Left(job) => complete(job)
-                                  case Right(err) => complete(StatusCodes.NotFound -> err)
-                                }
-                              },
-                              delete {
-                                dangerouslyDeleteDirectory(fileStore.resolve(id))
-                                onSuccess(changeStatus(id, "CANCELLED")) {
-                                  case Left(job) => complete(job)
-                                  case Right(err) => complete(StatusCodes.NotFound -> err)
-                                }
-                              }
-                            )
-                          },
-                          path("add") {
-                            uploadedFile("file") {
-                              case (metadata, file) => {
-                                moveToStore(id, file, metadata.fileName)
-                                complete(s"${metadata.toString} | ${file.toString}")
-                              }
-                            }
-                          },
-                          path("submit") {
-                            get {
-                              onSuccess(changeStatus(id, "SUBMITTED")) {
-                                case Left(job) => complete(job)
-                                case Right(err) => complete(StatusCodes.NotFound -> err)
-                              }
-                            }
-                          },
-                          path("download") {
-                            get {
-                              complete("Downloaded completed translation")
-                            }
-                          }
-                        )
                       }
                     )
+                  },
+                  pathPrefix(Segment) {
+                    id =>
+                      concat(
+                        pathEndOrSingleSlash {
+                          concat(
+                            get {
+                              onSuccess(checkStatus(id)) {
+                                case Left(job) => complete(job)
+                                case Right(err) =>
+                                  complete(StatusCodes.NotFound -> err)
+                              }
+                            },
+                            delete {
+                              dangerouslyDeleteDirectory(fileStore.resolve(id))
+                              onSuccess(changeStatus(id, "CANCELLED")) {
+                                case Left(job) => complete(job)
+                                case Right(err) =>
+                                  complete(StatusCodes.NotFound -> err)
+                              }
+                            }
+                          )
+                        },
+                        path("add") {
+                          uploadedFile("file") {
+                            case (metadata, file) => {
+                              moveToStore(id, file, metadata.fileName)
+                              complete(
+                                s"${metadata.toString} | ${file.toString}")
+                            }
+                          }
+                        },
+                        path("submit") {
+                          get {
+                            onSuccess(changeStatus(id, "SUBMITTED")) {
+                              case Left(job) => {
+                                translator ! job
+                                complete(job)
+                              }
+                              case Right(err) =>
+                                complete(StatusCodes.NotFound -> err)
+                            }
+                          }
+                        },
+                        path("download") {
+                          get {
+                            complete("Downloaded completed translation")
+                          }
+                        }
+                      )
                   }
                 )
               }
             )
-          })
+          }
+        )
       }
 
     val bindingFuture = Http().bindAndHandle(route, "0.0.0.0", 8491)
