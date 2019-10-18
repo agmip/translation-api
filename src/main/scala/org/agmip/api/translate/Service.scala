@@ -31,7 +31,8 @@ object Service {
     implicit val executionContext: ExecutionContext =  context.dispatcher
 
     def toAceDataset(job: Job) : Option[AceDataset] = {
-      val sourceDir: File = fileStore.resolve(job.id).resolve("inputs").toFile
+      val sourcePath: Path = fileStore.resolve(job.id).resolve("inputs")
+      val sourceDir: File = sourcePath.toFile
       val ds: Option[AceDataset] = if (sourceDir.isDirectory) {
         job.input match {
           case "ACEB" =>
@@ -98,7 +99,9 @@ object Service {
                        name: Option[String],
                        input: String,
                        output: String,
-                       status: String)
+                       status: String,
+                       download: Option[String]
+                      )
   final case class JobSubmission(name: Option[String],
                                  input: String,
                                  output: String)
@@ -108,7 +111,7 @@ object Service {
   implicit val jobSubmissionFormat = jsonFormat3(JobSubmission)
   implicit val jobIdFormat = jsonFormat1(JobId)
   implicit val errFormat = jsonFormat1(Err)
-  implicit val jobFormat = jsonFormat5(Job)
+  implicit val jobFormat = jsonFormat6(Job)
 
   val supportedCaps = Capabilities("ACEB" :: Nil, "DSSAT" :: Nil)
   var jobList: List[Job] = Nil
@@ -119,7 +122,7 @@ object Service {
 
   def createJob(job: JobSubmission): Job = {
     val newJob =
-      Job(UUID.randomUUID.toString, job.name, job.input, job.output, "PENDING")
+      Job(UUID.randomUUID.toString, job.name, job.input, job.output, "PENDING", None)
     jobList = newJob :: jobList
     newJob
   }
@@ -131,8 +134,8 @@ object Service {
     }
   }
 
-  def updateStatus(job: Job, newStatus: String): Job = {
-    val newJob = Job(job.id, job.name, job.input, job.output, newStatus)
+  def updateStatus(job: Job, newStatus: String, newDownload: Option[String] = None): Job = {
+    val newJob = Job(job.id, job.name, job.input, job.output, newStatus, newDownload)
     jobList = newJob :: jobList
     newJob
   }
@@ -141,10 +144,10 @@ object Service {
     findJob(jobId)
   }
 
-  def changeStatus(jobId: String, newStatus: String): Future[Either[Job, Err]] =
+  def changeStatus(jobId: String, newStatus: String, newDownload: Option[String] = None): Future[Either[Job, Err]] =
     Future {
       findJob(jobId) match {
-        case Left(job)  => Left(updateStatus(job, newStatus))
+        case Left(job)  => Left(updateStatus(job, newStatus, newDownload))
         case Right(err) => Right(err)
       }
     }
@@ -257,7 +260,23 @@ object Service {
                         },
                         path("download") {
                           get {
-                            complete("Downloaded completed translation")
+                            onSuccess(checkStatus(id)) {
+                              case Left(job) => {
+                                if(job.status == "COMPLETED") {
+                                  job.download match {
+                                    case Some(fileName) => {
+                                      val downloadFile: File = fileStore.resolve(job.id).resolve("outputs").resolve(fileName).toFile
+                                        getFromFile(downloadFile)
+                                    }
+                                    case None => complete(StatusCodes.NotFound)
+                                  }
+                                } else {
+                                  complete(StatusCodes.BadRequest -> "Can only download jobs marked complete")
+                                }
+                              }
+                              case Right(err) =>
+                                complete(StatusCodes.NotFound -> err)
+                            }
                           }
                         }
                       )
