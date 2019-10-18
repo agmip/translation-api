@@ -44,6 +44,25 @@ object Service {
                 None
               }
             }
+          case "SC2" => {
+            sourceDir.listFiles.find(_.getName.endsWith(".json")) match {
+              case Some(f: File) => {
+                val acePath: Path = sourcePath.resolve("dataset.aceb")
+                val sc = AnnotatedTranslatorKt.init(Source.fromFile(f).getLines.mkString)
+                val scratchDir = sourceDir.toPath.resolve("scratch")
+                Files.createDirectories(scratchDir)
+                AnnotatedTranslatorKt.downloadFiles(sc, scratchDir)
+                val targetFile = sc.getMapping.getFiles.get(0);
+                val data = ExcelParser.INSTANCE.parse(targetFile, scratchDir);
+                AnnotatedTranslatorKt.translateMap(data, acePath)
+                Some(AceParser.parseACEB(acePath.toFile))
+              }
+              case _ => {
+                changeStatus(job.id, "ERROR - Sidecar File not provided for annotated translator")
+                None
+              }
+            }
+          }
           case _ => {
             changeStatus(job.id, "ERROR - Invalid input type")
             None
