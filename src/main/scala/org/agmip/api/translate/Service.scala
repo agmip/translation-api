@@ -13,12 +13,15 @@ import akka.http.scaladsl.server.Route
 import akka.http.scaladsl.server.Directives._
 import akka.stream.ActorMaterializer
 import org.agmip.ace.AceDataset
-import org.agmip.ace.io.AceParser
+import org.agmip.ace.io.{AceGenerator, AceParser}
 import org.agmip.translators.dssat.DssatAcebOutput
+import org.agmip.translators.annotated.api.AnnotatedTranslatorKt
+import org.agmip.translators.annotated.api.handlers.ExcelParser
 import spray.json.DefaultJsonProtocol._
 
-import scala.io.StdIn
+import scala.io.{Source, StdIn}
 import scala.concurrent.{ExecutionContext, Future}
+import akka.http.scaladsl.server.directives.ContentTypeResolver.Default
 
 
 
@@ -58,6 +61,11 @@ object Service {
       job.output match {
         case "DSSAT" => {
           val output = DssatAcebOutput.writeZipFile(targetPath.toString(), dataset);
+          changeStatus(job.id, "COMPLETED", Some(output.getName))
+        }
+        case "ACEB" => {
+          val aceFile: File = targetPath.resolve("dataset.aceb").toFile
+          AceGenerator.generateACEB(aceFile, dataset)
           changeStatus(job.id, "COMPLETED")
         }
         case _ => {
@@ -159,18 +167,12 @@ object Service {
 
   def moveToStore(jobId: String, source: File, fileName: String) = {
     val destinationPath = fileStore.resolve(jobId).resolve("inputs")
-    Files.exists(destinationPath) match {
-      case true =>
-        Files.copy(source.toPath(), destinationPath.resolve(fileName))
-      case false => {
-        Files.createDirectories(destinationPath)
-        Files.copy(source.toPath(), destinationPath.resolve(fileName))
-      }
+    if (Files.exists(destinationPath)) {
+      Files.copy(source.toPath(), destinationPath.resolve(fileName))
+    } else {
+      Files.createDirectories(destinationPath)
+      Files.copy(source.toPath(), destinationPath.resolve(fileName))
     }
-  }
-
-  def executeJob(job: Job): Unit = {
-
   }
 
   def main(args: Array[String]): Unit = {
