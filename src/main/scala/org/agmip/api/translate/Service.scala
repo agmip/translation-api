@@ -52,8 +52,7 @@ object Service {
                 val scratchDir = sourceDir.toPath.resolve("scratch")
                 Files.createDirectories(scratchDir)
                 AnnotatedTranslatorKt.downloadFiles(sc, scratchDir)
-                val targetFile = sc.getMapping.getFiles.get(0);
-                val data = ExcelParser.INSTANCE.parse(targetFile, scratchDir);
+                val data = ExcelParser.INSTANCE.parse(sc, scratchDir);
                 AnnotatedTranslatorKt.translateMap(data, acePath)
                 Some(AceParser.parseACEB(acePath.toFile))
               }
