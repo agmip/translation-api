@@ -5,7 +5,6 @@ plugins {
 }
 
 repositories {
-    jcenter()
     mavenCentral()
     mavenLocal()
 }
@@ -21,6 +20,7 @@ dependencies {
     implementation "com.typesafe.akka:akka-http_${scalaVersion}:${akkaHttpVersion}"
     implementation "com.typesafe.akka:akka-stream_${scalaVersion}:${akkaVersion}"
     implementation "com.typesafe.akka:akka-http-spray-json_${scalaVersion}:${akkaHttpVersion}"
+    implementation "org.agmip.ace:ace-core:2.2.0-SNAPSHOT"
     implementation "org.agmip.translators:translator-dssat:1.2.21-SNAPSHOT"
     implementation "org.agmip.translators:translator-annotated-data:1.0.0-SNAPSHOT"
 }
